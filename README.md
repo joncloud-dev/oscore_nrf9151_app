@@ -59,15 +59,25 @@ west build -b nrf9151dk/nrf9151/ns oscore_nrf9151_app
 
 If you already have an NCS v3.4.0 workspace (e.g. `~/work/ncs`) with the
 `uoscore-uedhoc` fork checked out at `oscore-opaque-psa-keys`, you can build this
-app without re-downloading NCS by pointing Zephyr at the two module directories:
+app without re-downloading NCS. Source [`env.sh`](env.sh), which points Zephyr at
+the workspace and registers the standalone `oscore_cloud` library (a sibling
+repo) as an extra module:
 
 ```
-west build -b nrf9151dk/nrf9151/ns <path>/oscore_nrf9151_app -- \
-  -DZEPHYR_EXTRA_MODULES=<path>/oscore_cloud
+nrfutil toolchain-manager launch --shell
+source env.sh
+west build -b nrf9151dk/nrf9151/ns
 ```
 
-(Make sure the workspace's `uoscore-uedhoc` is the forked branch; otherwise the
-library will not compile against the opaque-key API.)
+Override paths if needed: `NCS_WORKSPACE=/path/to/ncs OSCORE_CLOUD_ROOT=/path/to/oscore_cloud source env.sh`.
+
+> Do NOT source `att/env.sh` in the same shell: it registers the whole
+> Asset-Tracker-Template repo as a module, which pulls in a second copy of
+> `oscore_cloud` (`att/modules/oscore_cloud`) and causes duplicate-symbol errors.
+> If a previous build mixed them in, do a pristine rebuild (`west build -p`).
+>
+> The workspace's `uoscore-uedhoc` must be the forked `oscore-opaque-psa-keys`
+> branch, otherwise the OSCORE wrapper will not compile against the opaque-key API.
 
 ## Provisioning (one-time, on the bench)
 
