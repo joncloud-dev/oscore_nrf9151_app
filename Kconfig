@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "OSCORE nRF9151 sample"
+
+config APP_SAMPLE_INTERVAL_SECONDS
+	int "Telemetry send interval (seconds)"
+	default 600
+	help
+	  How long the main loop sleeps between telemetry check-ins once the
+	  OSCORE cloud connection is established.
+
+config APP_VERSION
+	string "Reported firmware version string"
+	default "1.0.0-oscore-sample"
+	help
+	  Value reported to the cloud in telemetry well-known key 2 (fw version).
+	  Must be shorter than 24 bytes.
+
+source "Kconfig.zephyr"

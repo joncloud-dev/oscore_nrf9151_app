@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+build*/
+twister-out*/
+
+# West workspace state (materialized when this repo is used as a manifest repo).
+# The NCS tree (nrf/, zephyr/, modules/, bootloader/, ...) is checked out as
+# siblings in the workspace root, not inside this repo, so nothing else to list.
+.west/
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/

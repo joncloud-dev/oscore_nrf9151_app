@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# West T2 (star) manifest for the OSCORE nRF9151 sample.
+#
+# It imports sdk-nrf (which in turn imports Zephyr and all the usual modules),
+# then adds two same-named / extra project entries that the top manifest wins
+# over the imported ones:
+#
+#   * uoscore-uedhoc -> the joncloud-dev fork carrying the opaque PSA-key
+#     changes required by the oscore_cloud library. A project with this name is
+#     already pulled in by the sdk-nrf import; re-declaring it here at the top
+#     level overrides that pin with our fork + branch.
+#   * oscore_cloud   -> the reusable OSCORE cloud client module.
+#
+# To build against this manifest, clone this repo into an EMPTY workspace
+# directory and run `west init -l . && west update` from there (this pulls the
+# full NCS tree as siblings). For day-to-day iteration you can instead build
+# inside an existing NCS workspace (see README).
+
+manifest:
+  version: "0.13"
+
+  remotes:
+    - name: ncs
+      url-base: https://github.com/nrfconnect
+    - name: joncloud-dev
+      url-base: https://github.com/joncloud-dev
+
+  projects:
+    - name: sdk-nrf
+      remote: ncs
+      repo-path: sdk-nrf
+      revision: v3.4.0
+      import: true
+
+    # Overrides the uoscore-uedhoc pin imported via sdk-nrf with the fork that
+    # provides opaque PSA master keys (branch oscore-opaque-psa-keys).
+    - name: uoscore-uedhoc
+      remote: joncloud-dev
+      repo-path: uoscore-uedhoc
+      revision: oscore-opaque-psa-keys
+      path: modules/lib/uoscore-uedhoc
+
+    # The reusable OSCORE cloud client library (standalone Zephyr module).
+    - name: oscore_cloud
+      remote: joncloud-dev
+      repo-path: oscore_cloud
+      revision: main
+      path: modules/lib/oscore_cloud
+
+  self:
+    path: oscore_nrf9151_app

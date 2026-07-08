@@ -1,0 +1,98 @@
+# oscore_nrf9151_app
+
+A minimal reference application for the **nRF9151 DK** that talks to the OSCORE
+platform (the Go/PocketBase server) using the reusable
+[`oscore_cloud`](https://github.com/joncloud-dev/oscore_cloud) library.
+
+It is the "batteries included" usage of the library: no zbus, no state-machine
+framework — just a plain `main()` loop driving the `cloud_session` helper
+(connect -> send telemetry -> apply any shadow delta), see
+[`src/main.c`](src/main.c).
+
+## What it does
+
+1. Brings up the modem and registers on the LTE network.
+2. Best-effort wall-clock sync (for the optional telemetry timestamp).
+3. Configures the OSCORE cloud client and enters a connect / send / backoff loop,
+   posting a telemetry check-in every `CONFIG_APP_SAMPLE_INTERVAL_SECONDS`.
+
+Telemetry, device shadow, CoAP, OSCORE and CBOR are all handled by the library;
+this app only builds a `cloud_telemetry` record and reacts to shadow deltas.
+
+## Dependencies / manifest
+
+The [`west.yml`](west.yml) is a T2 (star) manifest. It:
+
+- imports **sdk-nrf v3.4.0** (which imports Zephyr and all standard modules),
+- **overrides** the `uoscore-uedhoc` pin with the
+  [`joncloud-dev/uoscore-uedhoc`](https://github.com/joncloud-dev/uoscore-uedhoc)
+  fork, branch `oscore-opaque-psa-keys` (opaque PSA master keys — required by the
+  library's OSCORE wrapper), and
+- adds the `oscore_cloud` library as a Zephyr module.
+
+## Building
+
+The board target is the non-secure nRF9151 DK image (TF-M + app):
+
+```
+west build -b nrf9151dk/nrf9151/ns
+west flash
+```
+
+### Option A — dedicated workspace (portable / CI)
+
+Because this repo is a west *manifest repo*, `west` treats its **parent
+directory** as the workspace root and checks the whole NCS tree out there. Use
+an empty directory so nothing else is polluted:
+
+```
+mkdir oscore-ws && cd oscore-ws
+git clone https://github.com/joncloud-dev/oscore_nrf9151_app
+west init -l oscore_nrf9151_app
+west update
+west build -b nrf9151dk/nrf9151/ns oscore_nrf9151_app
+```
+
+> Note: `west update` downloads the full NCS (~GBs) into `oscore-ws/`.
+
+### Option B — build inside an existing NCS workspace (fast iteration)
+
+If you already have an NCS v3.4.0 workspace (e.g. `~/work/ncs`) with the
+`uoscore-uedhoc` fork checked out at `oscore-opaque-psa-keys`, you can build this
+app without re-downloading NCS by pointing Zephyr at the two module directories:
+
+```
+west build -b nrf9151dk/nrf9151/ns <path>/oscore_nrf9151_app -- \
+  -DZEPHYR_EXTRA_MODULES=<path>/oscore_cloud
+```
+
+(Make sure the workspace's `uoscore-uedhoc` is the forked branch; otherwise the
+library will not compile against the opaque-key API.)
+
+## Provisioning (one-time, on the bench)
+
+OSCORE keys are **not** compiled in. Generate device material on the server
+(`POST /api/provision`), then load it once over the shell (UART) and reboot:
+
+```
+oscore provision <secret_hex(16B)> <salt_hex> <sender_id_hex> <recipient_id_hex>
+```
+
+The master secret is imported as a non-exportable, persistent PSA key in the
+TF-M secure domain; the salt and sender/recipient IDs go to PSA Protected
+Storage. On the next boot the app loads them automatically. Until a device is
+provisioned it logs an error and stays disconnected, but the shell stays up.
+
+## Configuration
+
+Key options (see [`prj.conf`](prj.conf) and [`Kconfig`](Kconfig)):
+
+| Option | Purpose |
+| --- | --- |
+| `CONFIG_OSCORE_SERVER_IP` | CoAP/OSCORE server IPv4 address |
+| `CONFIG_APP_SAMPLE_INTERVAL_SECONDS` | Telemetry check-in interval (default 600) |
+| `CONFIG_APP_VERSION` | Reported firmware version string |
+| `CONFIG_OSCORE_CLOUD_SESSION` | The framework-free connect/session helper (on) |
+
+FOTA (`CONFIG_OSCORE_CLOUD_FOTA`) and A-GNSS (`CONFIG_OSCORE_CLOUD_AGNSS`) are
+available in the library but disabled in this minimal sample.
