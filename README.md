@@ -11,13 +11,37 @@ framework — just a plain `main()` loop driving the `cloud_session` helper
 
 ## What it does
 
-1. Brings up the modem and registers on the LTE network.
+1. Brings up the modem and attaches to the LTE network via the lightweight
+   network module ([`src/network.c`](src/network.c)).
 2. Best-effort wall-clock sync (for the optional telemetry timestamp).
 3. Configures the OSCORE cloud client and enters a connect / send / backoff loop,
    posting a telemetry check-in every `CONFIG_APP_SAMPLE_INTERVAL_SECONDS`.
 
 Telemetry, device shadow, CoAP, OSCORE and CBOR are all handled by the library;
 this app only builds a `cloud_telemetry` record and reacts to shadow deltas.
+
+### LTE link handling
+
+LTE connectivity lives in a small, framework-free module
+([`src/network.c`](src/network.c) / [`src/network.h`](src/network.h)) rather than
+inline in `main()`. It follows the Asset-Tracker-Template's link semantics
+without the zbus/SMF machinery:
+
+- **PDN-based link state** — "connected" is driven by the modem's default-PDN
+  activate/deactivate events (an IP bearer is actually usable), not merely by
+  network-registration status. Exposed via `network_is_connected()` /
+  `network_wait_connected()`.
+- **Rich event handling** — a single `network_evt_handler_t` callback surfaces
+  SIM failure, attach rejected, modem reset-loop, light/full search-done, and
+  negotiated PSM/eDRX parameters.
+- **Modem DFU-result handling** on init (a scheduled delta update applied during
+  `nrf_modem_lib_init()` is classified instead of treated as a hard error).
+- **Escalating recovery ladder** (`network_recover()`): wait for auto re-attach
+  -> force an offline/normal cycle -> reinitialise the modem library.
+
+The `main()` loop stays single-threaded: it polls/blocks on the link state and
+asks the module to recover on persistent failure. LTE events arrive
+asynchronously on the `lte_lc` workqueue.
 
 ## Device observability
 

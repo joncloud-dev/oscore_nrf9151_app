@@ -16,4 +16,21 @@ config APP_VERSION
 	  Value reported to the cloud in telemetry well-known key 2 (fw version).
 	  Must be shorter than 24 bytes.
 
+config APP_LINK_TIMEOUT_SECONDS
+	int "LTE link-up wait timeout (seconds)"
+	default 180
+	help
+	  How long to wait for the modem to register on the LTE network, both at
+	  boot and after a link drop, before the recovery ladder escalates to the
+	  next stage. The modem keeps searching in the background regardless.
+
+config APP_MODEM_REINIT_AFTER_FAILURES
+	int "Consecutive failures before reinitialising the modem"
+	default 4
+	help
+	  Number of consecutive link-recovery attempts after which the recovery
+	  ladder reaches its heaviest local step: a full modem-library
+	  shutdown/reinit. Below this threshold it waits for auto re-registration
+	  and, from the second failure, forces an LTE offline/normal re-attach.
+
 source "Kconfig.zephyr"
