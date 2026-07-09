@@ -31,6 +31,9 @@
 #include <oscore_cloud/cloud_config.h>
 #include <oscore_cloud/cloud_session.h>
 #include <oscore_cloud/cloud_client.h>
+#ifdef CONFIG_OSCORE_CLOUD_DIAG
+#include <oscore_cloud/diag_bridge.h>
+#endif
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -116,7 +119,12 @@ static void build_telemetry(struct cloud_telemetry *t)
 
 	cloud_telemetry_init(t);
 	cloud_telemetry_set_transport(t, CLOUD_TRANSPORT_TN);
+#ifndef CONFIG_OSCORE_CLOUD_DIAG_BUILD_ID
+	/* With the diagnostics build-id enabled, the library reports an
+	 * auto-generated "<semver>+<build-id>" firmware version (from the VERSION
+	 * file) instead, so leave fw_version unset here and let the bridge fill it. */
 	cloud_telemetry_set_fw_version(t, CONFIG_APP_VERSION);
+#endif
 
 	if (date_time_now(&now_ms) == 0) {
 		cloud_telemetry_set_timestamp(t, (uint64_t)(now_ms / 1000));
@@ -135,6 +143,14 @@ int main(void)
 	int err;
 
 	LOG_INF("OSCORE nRF9151 sample starting");
+
+#ifdef CONFIG_OSCORE_CLOUD_DIAG
+	/* Process the retained observability region + hwinfo before anything else
+	 * can overwrite it: composes the boot report, recovers a pending crash
+	 * snapshot/breadcrumbs, and arms the one-shot device-info report. The
+	 * session helper folds these into telemetry automatically. */
+	oscore_cloud_diag_init();
+#endif
 
 	/* Initialise the settings subsystem up front so the OSCORE replay counter
 	 * (Sender Sequence Number) can be restored from NVS. The library also

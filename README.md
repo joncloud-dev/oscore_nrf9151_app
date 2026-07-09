@@ -19,6 +19,29 @@ framework — just a plain `main()` loop driving the `cloud_session` helper
 Telemetry, device shadow, CoAP, OSCORE and CBOR are all handled by the library;
 this app only builds a `cloud_telemetry` record and reacts to shadow deltas.
 
+## Device observability
+
+The sample enables the library's optional observability layer
+(`CONFIG_OSCORE_CLOUD_DIAG`): reboot reasons, a health-vitals heartbeat, minimal
+crash reports and static device info are folded into the ordinary telemetry
+uplink as nested CBOR maps (keys 20-23) and ingested by the PocketBase backend.
+`main()` only calls `oscore_cloud_diag_init()` once at boot; the session helper
+attaches everything to each telemetry post automatically. See the library's
+README and the top-level `OBSERVABILITY.md` for the full picture.
+
+Exercise it from the serial console with the `diag` shell group:
+
+```
+diag info                          # boot report, crash-pending, breadcrumbs, coredump size, live vitals
+diag reboot [fota|user|software]   # planned reboot -> exercises reboot-reason attribution
+diag coredump [erase]              # show (or erase) the stored coredump
+diag fault <null|badjump|stack|oops|panic|assert|unaligned|secure>
+```
+
+Disable the whole stack with `CONFIG_OSCORE_CLOUD_DIAG=n` (and drop the
+`diag`-related options in [`prj.conf`](prj.conf)), or take manual control of the
+cadence by setting `CONFIG_OSCORE_CLOUD_DIAG_AUTO_ATTACH=n`.
+
 ## Dependencies / manifest
 
 The [`west.yml`](west.yml) is a T2 (star) manifest. It:
@@ -101,8 +124,10 @@ Key options (see [`prj.conf`](prj.conf) and [`Kconfig`](Kconfig)):
 | --- | --- |
 | `CONFIG_OSCORE_SERVER_IP` | CoAP/OSCORE server IPv4 address |
 | `CONFIG_APP_SAMPLE_INTERVAL_SECONDS` | Telemetry check-in interval (default 600) |
-| `CONFIG_APP_VERSION` | Reported firmware version string |
+| `CONFIG_APP_VERSION` | Fallback firmware version (used only when the build-id version is off) |
 | `CONFIG_OSCORE_CLOUD_SESSION` | The framework-free connect/session helper (on) |
+| `CONFIG_OSCORE_CLOUD_DIAG` | Device observability (reboot/vitals/crash/device-info) folded into telemetry (on) |
+| `CONFIG_OSCORE_CLOUD_DIAG_VITALS_INTERVAL` | Telemetry sends between vitals heartbeats (1 = every send) |
 
 FOTA (`CONFIG_OSCORE_CLOUD_FOTA`) and A-GNSS (`CONFIG_OSCORE_CLOUD_AGNSS`) are
 available in the library but disabled in this minimal sample.
