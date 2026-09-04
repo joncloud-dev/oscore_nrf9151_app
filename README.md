@@ -20,6 +20,56 @@ framework — just a plain `main()` loop driving the `cloud_session` helper
 Telemetry, device shadow, CoAP, OSCORE and CBOR are all handled by the library;
 this app only builds a `cloud_telemetry` record and reacts to shadow deltas.
 
+## GNSS location + A-GNSS
+
+The sample runs a GNSS-only location search
+([`src/location.c`](src/location.c)) using the nRF Connect SDK Location library
+and fetches A-GNSS assistance over OSCORE (POST `/a`) instead of nRF Cloud. A
+completed fix is folded into the next telemetry uplink under map key 4
+(agnss-schema.md 2.1).
+
+Assistance is fetched in one of two modes, chosen per search:
+
+- **Single-shot** (`loc single`) — the request asks the server for only the
+  satellites visible *now*, capped to `CONFIG_APP_AGNSS_SINGLE_SHOT_MAX_SV`
+  (default 9) and encoded compactly. For single-shot the server raises the
+  elevation mask to 10° and keeps the strongest satellite per azimuth sector, so
+  the set is the few highest-signal, quick-to-acquire SVs. This is the smallest
+  payload (~0.5–0.7 kB) with a few-minutes validity, for devices that fetch
+  fresh assistance on every fix.
+- **2 h window** (`loc window`) — the request asks for every satellite that
+  will rise within the next `CONFIG_OSCORE_CLOUD_AGNSS_WINDOW_S_DEFAULT` seconds
+  (2 h), for a fix that stays usable across the window.
+
+Trigger a search from the serial console, or set the device shadow desired
+`{"loc":"single"}` / `{"loc":"window"}` to trigger one from the cloud:
+
+```
+loc single    # GNSS fix, single-shot A-GNSS (smallest payload)
+loc window    # GNSS fix, 2h-window A-GNSS
+```
+
+**Position hint.** The A-GNSS request carries a coarse position so the server
+can prune to visible satellites: the last GNSS fix if one exists this power
+cycle, otherwise the serving cell captured by the network module. With no hint
+the server falls back to the device's last-known fix (or sends the full
+constellation). The server returns that resolved position back in the `loc`
+element, and the app injects it as reference-location assistance so the modem
+can constrain its search for a faster cold lock.
+
+**Fast first fix.** The first search after boot competes with LTE (attach,
+telemetry, the assistance fetch), so GNSS gets only short RF windows and can
+take ~60 s even with valid assistance. The search enables the Location library's
+GNSS **priority mode** (`config.methods[0].gnss.priority_mode`), which lets GNSS
+pre-empt LTE if consecutive PVTs are blocked; it auto-disables after the first
+fix or 40 s, so it only affects that slow first acquisition.
+
+**Repeat-request suppression.** Because the server returns only a subset of the
+constellation, the GNSS core keeps re-raising the assistance request for the
+satellites it was not given. The location module fetches at most once per
+search and ignores further requests, so the modem proceeds to a fix with the
+partial set (assistance is optional). See [`src/location.c`](src/location.c).
+
 ### LTE link handling
 
 LTE connectivity lives in a small, framework-free module
@@ -152,6 +202,11 @@ Key options (see [`prj.conf`](prj.conf) and [`Kconfig`](Kconfig)):
 | `CONFIG_OSCORE_CLOUD_SESSION` | The framework-free connect/session helper (on) |
 | `CONFIG_OSCORE_CLOUD_DIAG` | Device observability (reboot/vitals/crash/device-info) folded into telemetry (on) |
 | `CONFIG_OSCORE_CLOUD_DIAG_VITALS_INTERVAL` | Telemetry sends between vitals heartbeats (1 = every send) |
+| `CONFIG_OSCORE_CLOUD_AGNSS` | OSCORE A-GNSS client (POST `/a`) — on in this sample |
+| `CONFIG_OSCORE_CLOUD_AGNSS_WINDOW_S_DEFAULT` | Default look-ahead window for the windowed mode (default 7200 = 2 h) |
+| `CONFIG_OSCORE_CLOUD_AGNSS_COMPACT` | Request the compact positional-array response encoding (on) |
+| `CONFIG_APP_AGNSS_SINGLE_SHOT_MAX_SV` | Satellite cap for `loc single` (default 9) |
+| `CONFIG_LOCATION` / `CONFIG_LOCATION_METHOD_GNSS` | GNSS location search |
 
-FOTA (`CONFIG_OSCORE_CLOUD_FOTA`) and A-GNSS (`CONFIG_OSCORE_CLOUD_AGNSS`) are
-available in the library but disabled in this minimal sample.
+FOTA (`CONFIG_OSCORE_CLOUD_FOTA`) is available in the library but disabled in
+this minimal sample.

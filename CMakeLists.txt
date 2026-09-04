@@ -14,3 +14,7 @@ target_sources(app PRIVATE
 	src/main.c
 	src/network.c
 )
+
+target_sources_ifdef(CONFIG_LOCATION app PRIVATE
+	src/location.c
+)

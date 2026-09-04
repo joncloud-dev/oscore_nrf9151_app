@@ -38,6 +38,24 @@ static atomic_t link_ready = ATOMIC_INIT(0);
 static network_evt_handler_t app_handler;
 static void *app_user;
 
+/* Latest serving cell, updated on LTE_LC_EVT_CELL_UPDATE and read by the main
+ * loop as an A-GNSS position hint. Guarded by a spinlock: the handler writes it
+ * from the lte_lc workqueue, the main loop reads it. */
+static struct network_cell serving_cell;
+static struct k_spinlock serving_cell_lock;
+
+bool network_serving_cell(struct network_cell *out)
+{
+	k_spinlock_key_t key = k_spin_lock(&serving_cell_lock);
+	struct network_cell snap = serving_cell;
+
+	k_spin_unlock(&serving_cell_lock, key);
+	if (out) {
+		*out = snap;
+	}
+	return snap.valid;
+}
+
 static void notify_app(const struct network_evt *evt)
 {
 	if (app_handler) {
@@ -106,6 +124,23 @@ static void lte_lc_evt_handler(const struct lte_lc_evt *const evt)
 		}
 		break;
 #endif /* CONFIG_LTE_LC_PDN_MODULE */
+
+	case LTE_LC_EVT_CELL_UPDATE:
+		/* Capture the serving cell as a coarse A-GNSS hint. A cell id of
+		 * UINT32_MAX means "no cell" (out of coverage); ignore it. */
+		if (evt->cell.id != 0 && evt->cell.id != UINT32_MAX) {
+			k_spinlock_key_t key = k_spin_lock(&serving_cell_lock);
+
+			serving_cell.id = evt->cell.id;
+			serving_cell.tac = evt->cell.tac;
+			serving_cell.mcc = evt->cell.mcc;
+			serving_cell.mnc = evt->cell.mnc;
+			serving_cell.rsrp = (int16_t)evt->cell.rsrp;
+			serving_cell.ta = evt->cell.timing_advance;
+			serving_cell.valid = true;
+			k_spin_unlock(&serving_cell_lock, key);
+		}
+		break;
 
 	case LTE_LC_EVT_MODEM_EVENT:
 		switch (evt->modem_evt.type) {

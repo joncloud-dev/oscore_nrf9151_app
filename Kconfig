@@ -33,4 +33,16 @@ config APP_MODEM_REINIT_AFTER_FAILURES
 	  shutdown/reinit. Below this threshold it waits for auto re-registration
 	  and, from the second failure, forces an LTE offline/normal re-attach.
 
+config APP_AGNSS_SINGLE_SHOT_MAX_SV
+	int "Single-shot A-GNSS satellite cap"
+	depends on LOCATION && OSCORE_CLOUD_AGNSS
+	default 9
+	help
+	  Number of satellites requested for a single-shot GNSS fix ("loc single"):
+	  the server keeps only satellites visible now (>=10 deg elevation), picks
+	  the strongest one per azimuth sector, and caps to this many for a small
+	  assistance payload. 9 gives an extra strong SV of acquisition margin over
+	  the 8-SV minimum while staying well under 1 kB with compact encoding. 0
+	  leaves it uncapped.
+
 source "Kconfig.zephyr"

@@ -87,6 +87,22 @@ bool network_is_connected(void);
  * Returns true if the link is up on return. */
 bool network_wait_connected(k_timeout_t timeout);
 
+/* Serving-cell snapshot, used as a coarse position hint for A-GNSS pruning when
+ * the device has no recent GNSS fix. Populated from LTE_LC_EVT_CELL_UPDATE. */
+struct network_cell {
+	uint32_t id;   /* E-UTRAN cell id (0 ⇒ unknown) */
+	uint32_t tac;  /* tracking area code */
+	int mcc;       /* mobile country code */
+	int mnc;       /* mobile network code */
+	int16_t rsrp;  /* serving RSRP, dBm (0 ⇒ absent) */
+	uint32_t ta;   /* timing advance (0 ⇒ absent) */
+	bool valid;    /* true once a cell update with a real id has arrived */
+};
+
+/* Copy the latest serving-cell snapshot into out. Returns true if a valid cell
+ * is known. Safe to call from the main loop. */
+bool network_serving_cell(struct network_cell *out);
+
 /* Escalating recovery ladder, keyed on the number of consecutive failures:
  *   - few failures: wait for the modem to re-attach on its own;
  *   - more failures: force an offline/normal re-attach;

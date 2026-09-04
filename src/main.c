@@ -34,6 +34,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
+#include <string.h>
 
 #include <date_time.h>
 
@@ -43,8 +44,15 @@
 #ifdef CONFIG_OSCORE_CLOUD_DIAG
 #include <oscore_cloud/diag_bridge.h>
 #endif
+#ifdef CONFIG_OSCORE_CLOUD_AGNSS
+#include <oscore_cloud/agnss_client.h>
+#endif
 
 #include "network.h"
+#ifdef CONFIG_LOCATION
+#include "location.h"
+#include <zephyr/shell/shell.h>
+#endif
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -64,6 +72,18 @@ static void on_shadow_delta(const struct cloud_shadow_delta *delta, void *user)
 
 	for (size_t i = 0; i < delta->entry_count; i++) {
 		LOG_INF("  %s = %s", delta->entries[i].key, delta->entries[i].value);
+
+#ifdef CONFIG_LOCATION
+		/* Cloud-driven location trigger: desired {"loc":"single"|"window"}
+		 * kicks off a GNSS fix with the matching A-GNSS mode. */
+		if (strcmp(delta->entries[i].key, "loc") == 0) {
+			if (strstr(delta->entries[i].value, "single")) {
+				(void)app_location_request(true);
+			} else if (strstr(delta->entries[i].value, "window")) {
+				(void)app_location_request(false);
+			}
+		}
+#endif
 	}
 }
 
@@ -152,6 +172,152 @@ static void build_telemetry(struct cloud_telemetry *t)
 	(void)cloud_telemetry_add_uint(t, 10, (uint64_t)k_uptime_seconds());
 }
 
+#ifdef CONFIG_LOCATION
+
+#ifdef CONFIG_OSCORE_CLOUD_AGNSS
+/* Build the A-GNSS fetch options for the current search: the look-ahead window
+ * and SV cap follow the single-shot vs windowed choice, and the position hint is
+ * the last GNSS fix if we have one, else the serving cell (agnss-schema.md 1.1). */
+static void build_agnss_opts(struct agnss_fetch_opts *o, bool single_shot)
+{
+	double lat, lon;
+	uint32_t unc;
+
+	memset(o, 0, sizeof(*o));
+	o->encoding = IS_ENABLED(CONFIG_OSCORE_CLOUD_AGNSS_COMPACT) ? 1 : 0;
+	if (single_shot) {
+		o->window_s = 0; /* only satellites visible now */
+		o->max_sv = CONFIG_APP_AGNSS_SINGLE_SHOT_MAX_SV;
+	} else {
+		o->window_s = CONFIG_OSCORE_CLOUD_AGNSS_WINDOW_S_DEFAULT;
+		o->max_sv = 0;
+	}
+
+	if (app_location_last_coords(&lat, &lon, &unc)) {
+		o->have_pos = true;
+		o->lat = lat;
+		o->lon = lon;
+		o->unc_m = unc;
+	} else {
+		struct network_cell c;
+
+		if (network_serving_cell(&c)) {
+			o->have_cell = true;
+			o->mcc = c.mcc;
+			o->mnc = c.mnc;
+			o->tac = c.tac;
+			o->ci = c.id;
+			o->rsrp = c.rsrp;
+			o->ta = c.ta;
+		}
+	}
+}
+
+/* Serve a pending A-GNSS assistance request over the (connected) cloud socket.
+ * Called from the main loop only, so it is serialized with telemetry sends. */
+static void service_agnss(void)
+{
+	struct nrf_modem_gnss_agnss_data_frame frame;
+	bool single_shot;
+
+	if (!network_is_connected()) {
+		return;
+	}
+	if (!app_location_agnss_pending(&frame, &single_shot)) {
+		return;
+	}
+
+	struct agnss_fetch_opts opts;
+
+	build_agnss_opts(&opts, single_shot);
+
+	int err = agnss_client_fetch_ex(&frame, &opts);
+
+	if (err) {
+		LOG_WRN("A-GNSS fetch failed: %d", err);
+	} else {
+		app_location_agnss_mark_fetched();
+	}
+}
+#endif /* CONFIG_OSCORE_CLOUD_AGNSS */
+
+/* Fold a completed GNSS fix into a telemetry uplink (key 4) and send it. */
+static void service_fix(void)
+{
+	struct app_fix f;
+
+	if (!network_is_connected() || !app_location_get_fix(&f)) {
+		return;
+	}
+
+	struct cloud_telemetry t;
+
+	build_telemetry(&t);
+
+	struct cloud_telemetry_gnss g = {
+		.valid = true,
+		.lat = f.lat,
+		.lon = f.lon,
+		.accuracy = f.accuracy_m,
+		.have_alt = f.has_alt,
+		.altitude = f.alt_m,
+		.ttff_ms = f.ttff_ms,
+		.fix_time_sec = (uint64_t)f.timestamp,
+	};
+
+	cloud_telemetry_set_gnss(&t, &g);
+
+	int err = oscore_cloud_send_telemetry(&t, on_shadow_delta, NULL);
+
+	if (err) {
+		LOG_WRN("Fix telemetry send failed: %d (will retry on next check-in)", err);
+	} else {
+		LOG_INF("GNSS fix reported (ttff %u ms)", f.ttff_ms);
+	}
+}
+
+/* Poll location work (A-GNSS fetch + fix reporting) for up to secs, in 1 s
+ * steps, so assistance requests raised by an in-flight search are served
+ * promptly instead of waiting for the next check-in. */
+static void location_wait(uint32_t secs)
+{
+	for (uint32_t s = 0; s < secs; s++) {
+#ifdef CONFIG_OSCORE_CLOUD_AGNSS
+		service_agnss();
+#endif
+		service_fix();
+		k_sleep(K_SECONDS(1));
+	}
+}
+
+static int cmd_loc_single(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+	shell_print(sh, "Triggering single-shot GNSS fix");
+	return app_location_request(true);
+}
+
+static int cmd_loc_window(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+	shell_print(sh, "Triggering 2h-window GNSS fix");
+	return app_location_request(false);
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(loc_cmds,
+	SHELL_CMD(single, NULL, "GNSS fix with single-shot A-GNSS (smallest payload)", cmd_loc_single),
+	SHELL_CMD(window, NULL, "GNSS fix with 2h-window A-GNSS", cmd_loc_window),
+	SHELL_SUBCMD_SET_END);
+SHELL_CMD_REGISTER(loc, &loc_cmds, "GNSS location commands", NULL);
+
+#else /* !CONFIG_LOCATION */
+
+static void location_wait(uint32_t secs) { k_sleep(K_SECONDS(secs)); }
+
+#endif /* CONFIG_LOCATION */
+
 int main(void)
 {
 	const uint32_t interval_s = CONFIG_APP_SAMPLE_INTERVAL_SECONDS;
@@ -203,6 +369,13 @@ int main(void)
 		LOG_ERR("oscore_cloud_init failed: %d", err);
 		return err;
 	}
+
+#ifdef CONFIG_LOCATION
+	err = app_location_init();
+	if (err) {
+		LOG_WRN("Location init failed (%d); GNSS features disabled", err);
+	}
+#endif
 
 	while (1) {
 		/* Never touch the cloud transport while the radio link is down; wait
@@ -267,7 +440,10 @@ int main(void)
 		LOG_INF("Telemetry sent; next check-in in %u s", interval_s);
 		attempts = 0;
 		failures = 0;
-		k_sleep(K_SECONDS(interval_s));
+
+		/* Poll location work during the idle interval so A-GNSS requests from
+		 * an in-flight GNSS search are served and fixes reported promptly. */
+		location_wait(interval_s);
 	}
 
 	return 0;
