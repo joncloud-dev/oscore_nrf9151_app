@@ -17,4 +17,5 @@ target_sources(app PRIVATE
 
 target_sources_ifdef(CONFIG_LOCATION app PRIVATE
 	src/location.c
+	src/soak.c
 )

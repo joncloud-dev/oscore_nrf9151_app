@@ -1,0 +1,30 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Flash layout for the nrf9151dk MCUboot image, applied by sysbuild.cmake.
+ *
+ * MCUboot must see exactly the same partition bounds as the application: this
+ * app grows slot0 and moves slot1 to external flash, and a bootloader that
+ * disagreed would write its image trailer outside the slot. Board .overlay files
+ * reach only the application image, hence this.
+ */
+
+#include "nrf9151dk_flash_partitions.dtsi"
+
+/*
+ * Link MCUboot into boot_partition.
+ *
+ * MCUboot's own boot/zephyr/app.overlay is what normally chooses this, but it is
+ * only applied when Zephyr does not find a board-specific overlay in
+ * boot/zephyr/boards/. MCUboot ships one for the Thingy:91 X
+ * (thingy91x_nrf9151.overlay, which just raises the UART baud), so on that board
+ * app.overlay is skipped and zephyr,code-partition stays &slot0_partition from
+ * the board devicetree -- linking MCUboot on top of the application image and
+ * leaving nothing at the reset vector. Set it explicitly here, for both boards,
+ * so the layout does not depend on which overlays upstream happens to ship.
+ */
+/ {
+	chosen {
+		zephyr,code-partition = &boot_partition;
+	};
+};

@@ -1,0 +1,88 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * nRF9151 DK flash layout. Shared by the application image and by MCUboot (see
+ * sysbuild.cmake); both must agree, or MCUboot writes its image trailer outside
+ * the slot. Addresses and sizes come from oscore_flash_layout.h, which documents
+ * the layout and why it is what it is.
+ *
+ * The board's stock devicetree (zephyr/dts/vendor/nordic/nrf91xx_partition.dtsi)
+ * already provides boot_partition, the TF-M storage areas and the settings
+ * partition at the right addresses, so only the two image slots are rebuilt:
+ * slot0 grows into the 448 KB that slot1 used to occupy, and slot1 moves to the
+ * external SPI NOR chip.
+ */
+
+#include "oscore_flash_layout.h"
+
+/delete-node/ &slot0_partition;
+/delete-node/ &slot1_partition;
+
+&flash0 {
+	partitions {
+		slot0_partition: partition@10000 {
+			compatible = "zephyr,mapped-partition";
+			label = "image-0";
+			reg = <OSCORE_SLOT_OFFSET OSCORE_SLOT_SIZE>;
+			ranges = <0x0 OSCORE_SLOT_OFFSET OSCORE_SLOT_SIZE>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			slot0_s_partition: partition@0 {
+				compatible = "zephyr,mapped-partition";
+				label = "image-0-secure";
+				reg = <0x0 OSCORE_SLOT_S_SIZE>;
+			};
+
+			slot0_ns_partition: partition@30000 {
+				compatible = "zephyr,mapped-partition";
+				label = "image-0-nonsecure";
+				reg = <OSCORE_SLOT_NS_OFFSET OSCORE_SLOT_NS_SIZE>;
+			};
+		};
+	};
+};
+
+/* The DK's 32 MiB GD25WB256 sits on spi3 CS1 and ships disabled; spi3 itself is
+ * already enabled by the board. Enabled here rather than in the board .overlay
+ * so MCUboot, which now reaches slot1 through it, gets it too. */
+&gd25wb256 {
+	status = "okay";
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		slot1_partition: partition@0 {
+			compatible = "fixed-subpartitions";
+			label = "image-1";
+			/* MUST equal slot0_partition: MCUboot's swap refuses to run
+			 * when the primary and secondary slots differ in size. */
+			reg = <0x0 OSCORE_SLOT_SIZE>;
+			ranges = <0x0 0x0 OSCORE_SLOT_SIZE>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			slot1_s_partition: partition@0 {
+				label = "image-1-secure";
+				reg = <0x0 OSCORE_SLOT_S_SIZE>;
+			};
+
+			slot1_ns_partition: partition@30000 {
+				label = "image-1-nonsecure";
+				reg = <OSCORE_SLOT_NS_OFFSET OSCORE_SLOT_NS_SIZE>;
+			};
+		};
+
+		pgps_storage: partition@e0000 {
+			label = "pgps_storage";
+			reg = <OSCORE_PGPS_OFFSET OSCORE_PGPS_SIZE>;
+		};
+
+		external_flash_partition: partition@134000 {
+			label = "external_flash";
+			reg = <OSCORE_EXTFREE_OFFSET OSCORE_EXTFREE_SIZE>;
+		};
+	};
+};

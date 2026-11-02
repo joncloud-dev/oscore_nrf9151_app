@@ -20,24 +20,27 @@ LOG_MODULE_REGISTER(app_location, LOG_LEVEL_INF);
 static K_MUTEX_DEFINE(loc_lock);
 
 static bool search_active;
-static bool current_single_shot;
+static enum app_assist current_assist;
+static bool current_all;     /* fetch the full constellation (skip server pruning) */
 
 static bool agnss_pending;
-static bool agnss_fetched;   /* fetched at least once for the current search */
+static bool agnss_fetched;   /* fetched/injected at least once for the current search */
 static struct nrf_modem_gnss_agnss_data_frame agnss_frame;
 
 static bool fix_ready;
 static struct app_fix pending_fix;
+static uint32_t fix_count;
 
 static bool have_last_coords;
 static double last_lat, last_lon;
 static uint32_t last_unc_m;
 
-static void search_reset(bool single_shot)
+static void search_reset(enum app_assist mode, bool all)
 {
 	k_mutex_lock(&loc_lock, K_FOREVER);
 	search_active = true;
-	current_single_shot = single_shot;
+	current_assist = mode;
+	current_all = all;
 	agnss_pending = false;
 	agnss_fetched = false;
 	k_mutex_unlock(&loc_lock);
@@ -74,6 +77,7 @@ static void store_fix(const struct location_data *loc)
 	k_mutex_lock(&loc_lock, K_FOREVER);
 	pending_fix = f;
 	fix_ready = true;
+	fix_count++;
 	have_last_coords = true;
 	last_lat = f.lat;
 	last_lon = f.lon;
@@ -148,7 +152,23 @@ int app_location_init(void)
 	return 0;
 }
 
-int app_location_request(bool single_shot)
+const char *app_assist_name(enum app_assist mode)
+{
+	switch (mode) {
+	case APP_ASSIST_AGNSS_SINGLE:
+		return "A-GNSS single-shot";
+	case APP_ASSIST_AGNSS_WINDOW:
+		return "A-GNSS 2h window";
+	case APP_ASSIST_PGPS:
+		return "P-GPS stored window";
+	case APP_ASSIST_NONE:
+		return "unassisted";
+	default:
+		return "?";
+	}
+}
+
+int app_location_request_assist(enum app_assist mode, bool all)
 {
 	struct location_config config;
 	enum location_method methods[] = { LOCATION_METHOD_GNSS };
@@ -166,31 +186,77 @@ int app_location_request(bool single_shot)
 	 * it only affects the slow first acquisition. */
 	config.methods[0].gnss.priority_mode = true;
 
-	search_reset(single_shot);
+	search_reset(mode, all);
 
 	err = location_request(&config);
 	if (err) {
-		LOG_ERR("location_request failed: %d", err);
+		LOG_ERR("location_request (%s) failed: %d", app_assist_name(mode), err);
 		search_end();
 		return err;
 	}
-	LOG_INF("GNSS search requested (%s)", single_shot ? "single-shot" : "2h window");
+	LOG_INF("GNSS search requested (%s%s)", app_assist_name(mode), all ? ", all SVs" : "");
 	return 0;
 }
 
+int app_location_request(bool single_shot, bool all)
+{
+	return app_location_request_assist(single_shot ? APP_ASSIST_AGNSS_SINGLE
+						       : APP_ASSIST_AGNSS_WINDOW,
+					   all);
+}
+
+int app_location_request_pgps(void)
+{
+	return app_location_request_assist(APP_ASSIST_PGPS, false);
+}
+
+bool app_location_search_active(void)
+{
+	bool active;
+
+	k_mutex_lock(&loc_lock, K_FOREVER);
+	active = search_active;
+	k_mutex_unlock(&loc_lock);
+	return active;
+}
+
 bool app_location_agnss_pending(struct nrf_modem_gnss_agnss_data_frame *frame,
-				bool *single_shot)
+				bool *single_shot, bool *all)
 {
 	bool pending;
 
 	k_mutex_lock(&loc_lock, K_FOREVER);
-	pending = agnss_pending;
+	/* Only the two A-GNSS modes are served over the network. In P-GPS mode the
+	 * assistance-need is serviced by injecting a stored predicted window
+	 * (app_location_pgps_pending), and APP_ASSIST_NONE serves nothing at all,
+	 * so the modem fixes on sky-decoded data only. */
+	pending = agnss_pending && (current_assist == APP_ASSIST_AGNSS_SINGLE ||
+				    current_assist == APP_ASSIST_AGNSS_WINDOW);
 	if (pending) {
 		if (frame) {
 			*frame = agnss_frame;
 		}
 		if (single_shot) {
-			*single_shot = current_single_shot;
+			*single_shot = (current_assist == APP_ASSIST_AGNSS_SINGLE);
+		}
+		if (all) {
+			*all = current_all;
+		}
+		agnss_pending = false;
+	}
+	k_mutex_unlock(&loc_lock);
+	return pending;
+}
+
+bool app_location_pgps_pending(struct nrf_modem_gnss_agnss_data_frame *frame)
+{
+	bool pending;
+
+	k_mutex_lock(&loc_lock, K_FOREVER);
+	pending = agnss_pending && current_assist == APP_ASSIST_PGPS;
+	if (pending) {
+		if (frame) {
+			*frame = agnss_frame;
 		}
 		agnss_pending = false;
 	}
@@ -221,6 +287,16 @@ bool app_location_get_fix(struct app_fix *fix)
 	return ready;
 }
 
+uint32_t app_location_fix_count(void)
+{
+	uint32_t n;
+
+	k_mutex_lock(&loc_lock, K_FOREVER);
+	n = fix_count;
+	k_mutex_unlock(&loc_lock);
+	return n;
+}
+
 bool app_location_last_coords(double *lat, double *lon, uint32_t *unc_m)
 {
 	bool have;
@@ -240,4 +316,14 @@ bool app_location_last_coords(double *lat, double *lon, uint32_t *unc_m)
 	}
 	k_mutex_unlock(&loc_lock);
 	return have;
+}
+
+void app_location_set_last_coords(double lat, double lon, uint32_t unc_m)
+{
+	k_mutex_lock(&loc_lock, K_FOREVER);
+	have_last_coords = true;
+	last_lat = lat;
+	last_lon = lon;
+	last_unc_m = (unc_m > 0) ? unc_m : 1;
+	k_mutex_unlock(&loc_lock);
 }

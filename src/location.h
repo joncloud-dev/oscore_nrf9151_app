@@ -48,29 +48,78 @@ struct app_fix {
  * library is up (network_init has returned). Returns 0 or a negative errno. */
 int app_location_init(void);
 
-/* Trigger a one-shot GNSS search. single_shot selects the A-GNSS look-ahead
- * window sent with the assistance fetch: true = instant/single-shot (smallest
- * payload, few-minutes validity), false = full 2h window. Returns 0 or errno. */
-int app_location_request(bool single_shot);
+/* Which assistance source feeds a GNSS search. The mode decides how the modem's
+ * assistance-need event is served: over the network (A-GNSS), from the stored
+ * predicted windows (P-GPS), or not at all. */
+enum app_assist {
+	/* Live A-GNSS fetch, look-ahead 0: only satellites visible now, capped to
+	 * CONFIG_APP_AGNSS_SINGLE_SHOT_MAX_SV. Smallest payload per fix. */
+	APP_ASSIST_AGNSS_SINGLE,
+	/* Live A-GNSS fetch with the full 2 h look-ahead window. */
+	APP_ASSIST_AGNSS_WINDOW,
+	/* Inject the stored predicted window covering now; never goes online. */
+	APP_ASSIST_PGPS,
+	/* Serve nothing: the modem fixes on whatever it can decode from the sky.
+	 * The control case for assistance comparisons. */
+	APP_ASSIST_NONE,
+};
+
+/* Human-readable name of an assistance mode, for logs and shell output. */
+const char *app_assist_name(enum app_assist mode);
+
+/* Trigger a one-shot GNSS search served by the given assistance mode. all
+ * requests the full constellation for the fetch (server skips SV pruning),
+ * trading payload size for coverage; it is only meaningful for the A-GNSS modes.
+ * Returns 0 or a negative errno. */
+int app_location_request_assist(enum app_assist mode, bool all);
+
+/* True while a GNSS search started here is still running. */
+bool app_location_search_active(void);
+
+/* Convenience wrapper: APP_ASSIST_AGNSS_SINGLE / APP_ASSIST_AGNSS_WINDOW. */
+int app_location_request(bool single_shot, bool all);
+
+/* Convenience wrapper: APP_ASSIST_PGPS. */
+int app_location_request_pgps(void);
 
 /* If an A-GNSS assistance request is pending (and not yet fetched for the
  * current search), copy the modem's request frame into *frame, report the
- * search's single_shot mode in *single_shot, and return true. The pending flag
- * is cleared; call app_location_agnss_mark_fetched() after a successful fetch so
+ * search's single_shot mode in *single_shot and its all (unpruned) mode in *all,
+ * and return true. Any of frame/single_shot/all may be NULL. The pending flag is
+ * cleared; call app_location_agnss_mark_fetched() after a successful fetch so
  * repeat requests in the same search are suppressed. */
 bool app_location_agnss_pending(struct nrf_modem_gnss_agnss_data_frame *frame,
-				bool *single_shot);
+				bool *single_shot, bool *all);
 
-/* Mark that assistance was fetched for the current search, so subsequent
- * LOCATION_EVT_GNSS_ASSISTANCE_REQUEST events in this search are ignored. */
+/* If the current search was started with app_location_request_pgps() and the
+ * modem has raised an assistance-need not yet serviced this search, copy the
+ * request frame into *frame (may be NULL) and return true, clearing the pending
+ * flag. Call app_location_agnss_mark_fetched() after injecting so repeat
+ * requests in this search are suppressed. */
+bool app_location_pgps_pending(struct nrf_modem_gnss_agnss_data_frame *frame);
+
+/* Mark that assistance was fetched (A-GNSS) or injected (P-GPS) for the current
+ * search, so subsequent LOCATION_EVT_GNSS_ASSISTANCE_REQUEST events in this
+ * search are ignored. */
 void app_location_agnss_mark_fetched(void);
 
 /* If a new GNSS fix is ready, copy it into *fix and return true (clearing it). */
 bool app_location_get_fix(struct app_fix *fix);
 
+/* Number of fixes stored since boot. Lets a caller decide whether a search it
+ * started produced a fix without consuming the pending one (which belongs to
+ * the telemetry path, and which is not consumed at all while the link is down). */
+uint32_t app_location_fix_count(void);
+
 /* Last known GNSS coordinates, for use as an A-GNSS position hint. Returns true
  * if a fix has ever been obtained this power cycle. */
 bool app_location_last_coords(double *lat, double *lon, uint32_t *unc_m);
+
+/* Seed the last-known GNSS coordinates manually (degrees, uncertainty in metres),
+ * as if a fix had been obtained. Lets a device with no fix this power cycle still
+ * provide a coarse reference position for the A-GNSS / P-GPS LOCATION assistance
+ * and for server-side per-window pruning. unc_m is clamped to a minimum of 1 m. */
+void app_location_set_last_coords(double lat, double lon, uint32_t unc_m);
 
 #ifdef __cplusplus
 }

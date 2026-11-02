@@ -1,0 +1,138 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Thingy:91 X flash layout -- the same layout the nRF9151 DK uses. Shared by the
+ * application image and by MCUboot (see sysbuild.cmake). Addresses and sizes
+ * come from oscore_flash_layout.h, which documents the layout and the reasoning.
+ *
+ * The Thingy:91 X ships the factory b0 + updatable-MCUboot (s0/s1) chain and
+ * spends its entire 1 MiB on it, with no TF-M storage partitions at all, so the
+ * whole internal layout is rebuilt here. Two things made the factory layout
+ * unusable for this app:
+ *
+ *   1. NCS derives TF-M's PS/ITS/OTP areas from the tfm_ps_partition /
+ *      tfm_its_partition / tfm_otp_partition nodelabels (see
+ *      nrf/modules/trusted-firmware-m/tfm_boards/partition/flash_layout.h). With
+ *      none of them present a full-profile TF-M build -- which this app needs,
+ *      since uoscore-uedhoc keeps the OSCORE master secret as an opaque PSA key
+ *      and the provisioned key is persistent, living in Internal Trusted Storage
+ *      -- fails with "TFM_OTP_NV_COUNTERS_AREA_ADDR must be defined in
+ *      flash_layout.h".
+ *   2. MCUboot built as a second stage (under b0, running from s0/s1) requires
+ *      zephyr,code-partition to be s0_partition or s1_partition, while its own
+ *      app.overlay chooses &boot_partition, which the factory layout lacks.
+ *
+ * SB_CONFIG_SECURE_BOOT_APPCORE=n in sysbuild.conf drops b0 to match.
+ *
+ * fmfu_storage_partition is reclaimed: the board declares it but nothing chooses
+ * it, and this app does not do full-modem-firmware updates.
+ *
+ * NOT interchangeable with Thingy:91 X factory firmware over USB DFU -- both the
+ * bootloader chain and the slot bounds change. Flash the whole image.
+ */
+
+#include "oscore_flash_layout.h"
+
+/delete-node/ &b0_partition;
+/delete-node/ &s0_partition;
+/delete-node/ &s1_partition;
+/delete-node/ &slot0_partition;
+/delete-node/ &slot1_partition;
+/delete-node/ &fmfu_storage_partition;
+/delete-node/ &storage_partition;
+/delete-node/ &external_flash_partition;
+
+&flash0 {
+	partitions {
+		boot_partition: partition@0 {
+			compatible = "zephyr,mapped-partition";
+			label = "mcuboot";
+			reg = <OSCORE_BOOT_OFFSET OSCORE_BOOT_SIZE>;
+		};
+
+		slot0_partition: partition@10000 {
+			compatible = "zephyr,mapped-partition";
+			label = "image-0";
+			reg = <OSCORE_SLOT_OFFSET OSCORE_SLOT_SIZE>;
+			ranges = <0x0 OSCORE_SLOT_OFFSET OSCORE_SLOT_SIZE>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			slot0_s_partition: partition@0 {
+				compatible = "zephyr,mapped-partition";
+				label = "image-0-secure";
+				reg = <0x0 OSCORE_SLOT_S_SIZE>;
+			};
+
+			slot0_ns_partition: partition@30000 {
+				compatible = "zephyr,mapped-partition";
+				label = "image-0-nonsecure";
+				reg = <OSCORE_SLOT_NS_OFFSET OSCORE_SLOT_NS_SIZE>;
+			};
+		};
+
+		tfm_ps_partition: partition@f0000 {
+			compatible = "zephyr,mapped-partition";
+			label = "tfm-ps";
+			reg = <OSCORE_TFM_PS_OFFSET OSCORE_TFM_PS_SIZE>;
+		};
+
+		tfm_its_partition: partition@f4000 {
+			compatible = "zephyr,mapped-partition";
+			label = "tfm-its";
+			reg = <OSCORE_TFM_ITS_OFFSET OSCORE_TFM_ITS_SIZE>;
+		};
+
+		tfm_otp_partition: partition@f6000 {
+			compatible = "zephyr,mapped-partition";
+			label = "tfm-otp";
+			reg = <OSCORE_TFM_OTP_OFFSET OSCORE_TFM_OTP_SIZE>;
+		};
+
+		storage_partition: partition@f8000 {
+			compatible = "zephyr,mapped-partition";
+			label = "storage";
+			reg = <OSCORE_SETTINGS_OFFSET OSCORE_SETTINGS_SIZE>;
+		};
+	};
+};
+
+/* The 32 MiB GD25LE255E sits on spi3 CS0 and ships disabled; spi3 itself is
+ * already enabled for the nRF9151 target. Enabled here rather than in the board
+ * .overlay so MCUboot, which reaches slot1 through it, gets it too. */
+&flash_ext {
+	status = "okay";
+
+	partitions {
+		slot1_partition: partition@0 {
+			compatible = "fixed-subpartitions";
+			label = "image-1";
+			/* MUST equal slot0_partition: MCUboot's swap refuses to run
+			 * when the primary and secondary slots differ in size. */
+			reg = <0x0 OSCORE_SLOT_SIZE>;
+			ranges = <0x0 0x0 OSCORE_SLOT_SIZE>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			slot1_s_partition: partition@0 {
+				label = "image-1-secure";
+				reg = <0x0 OSCORE_SLOT_S_SIZE>;
+			};
+
+			slot1_ns_partition: partition@30000 {
+				label = "image-1-nonsecure";
+				reg = <OSCORE_SLOT_NS_OFFSET OSCORE_SLOT_NS_SIZE>;
+			};
+		};
+
+		pgps_storage: partition@e0000 {
+			label = "pgps_storage";
+			reg = <OSCORE_PGPS_OFFSET OSCORE_PGPS_SIZE>;
+		};
+
+		external_flash_partition: partition@134000 {
+			label = "external_flash";
+			reg = <OSCORE_EXTFREE_OFFSET OSCORE_EXTFREE_SIZE>;
+		};
+	};
+};

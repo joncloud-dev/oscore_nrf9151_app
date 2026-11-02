@@ -1,35 +1,16 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Rebalance the primary image area between TF-M (secure) and the application
- * (non-secure).
+ * nRF9151 DK application image.
  *
- * The board default (zephyr/dts/vendor/nordic/nrf91xx_partition.dtsi) splits
- * the 448 KB primary image area (0x10000..0x80000) into a 256 KB secure slot
- * and a 192 KB non-secure slot:
+ * The flash layout is shared with the MCUboot image (see sysbuild.cmake and
+ * nrf9151dk_flash_partitions.dtsi). Two things it changes from the board default,
+ * both explained in oscore_flash_layout.h: the secure/non-secure boundary inside
+ * slot0 moves down so TF-M's full profile fits, and slot1 moves to the external
+ * SPI NOR chip so the application gets 704 KB instead of 256 KB.
  *
- *     slot0_s_partition  0x10000..0x50000  (256 KB)  <- TF-M uses ~130 KB
- *     slot0_ns_partition 0x50000..0x80000  (192 KB)  <- app overflows this
- *
- * Once GNSS location is enabled the non-secure image (OSCORE + Location +
- * nRF Cloud A-GNSS request plumbing + cJSON + mbedTLS) no longer fits in
- * 192 KB. TF-M's flash region is derived from slot0_s_partition, so moving the
- * secure/non-secure boundary down one 32 KB SPU region hands the extra 64 KB
- * to the application while leaving TF-M ~60 KB of headroom:
- *
- *     slot0_s_partition  0x10000..0x40000  (192 KB)
- *     slot0_ns_partition 0x40000..0x80000  (256 KB)
- *
- * Child reg values are relative to slot0_partition (base 0x10000). The 0x40000
- * boundary is 32 KB aligned, as the SPU requires. The unused secondary image
- * slot (slot1, 0x80000) and storage_partition are left untouched; re-enabling
- * FOTA later still has a full-size upgrade slot available.
+ * The SRAM split is the board's stock 88 KB secure / 168 KB non-secure, which
+ * this app already runs with.
  */
 
-&slot0_s_partition {
-	reg = <0x0 0x30000>;
-};
-
-&slot0_ns_partition {
-	reg = <0x30000 0x40000>;
-};
+#include "nrf9151dk_flash_partitions.dtsi"

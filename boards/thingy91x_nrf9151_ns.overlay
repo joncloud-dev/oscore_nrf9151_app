@@ -1,0 +1,67 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Thingy:91 X application image.
+ *
+ * The flash layout is shared with the MCUboot image (see sysbuild.cmake and the
+ * header of thingy91x_flash_partitions.dtsi, which explains why the factory
+ * layout cannot be used). Only the SRAM split below is application-only:
+ * MCUboot runs without TF-M and keeps the board's.
+ */
+
+#include "thingy91x_flash_partitions.dtsi"
+
+/* ------------------------------------------------------------------------- *
+ * SRAM: the board splits 256 KB as 32 KB secure / 224 KB non-secure, sized for
+ * TF-M's minimal profile. The full profile does not fit in 32 KB.
+ *
+ *   sram0_s   0x20000000..0x20016000  ( 88 KB)
+ *   sram0_ns  0x20016000..0x20040000  (168 KB)
+ *     modem shared area              (17768 B, board values kept verbatim)
+ *     sram0_ns_app                   (~150 KB)
+ *
+ * 88 KB secure is the stock Zephyr nRF91 split this app already runs with on the
+ * DK, so it introduces no new unknown, and the non-secure app still gets ~150 KB
+ * against the DK's 128 KB. The modem IPC regions are reproduced exactly as the
+ * board sizes them; shrinking them would change modem throughput.
+ * ------------------------------------------------------------------------- */
+
+/delete-node/ &sram0_s;
+/delete-node/ &sram0_ns;
+
+&sram0 {
+	sram0_s: sram@0 {
+		reg = <0x0 0x16000>;
+	};
+
+	sram0_ns: sram@16000 {
+		reg = <0x16000 0x2a000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x16000 0x2a000>;
+
+		/* Must be in the first 128 kB of RAM. */
+		sram0_ns_modem: sram0_ns@0 {
+			reg = <0x0 0x4568>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x0 0x0 0x4568>;
+
+			cpuapp_cpucell_ipc_shm_ctrl: sram0_ns_modem@0 {
+				reg = <0x0 0x4e8>;
+			};
+
+			cpuapp_cpucell_ipc_shm_heap: sram0_ns_modem@4e8 {
+				reg = <0x4e8 0x2080>;
+			};
+
+			cpucell_cpuapp_ipc_shm_heap: sram0_ns_modem@2568 {
+				reg = <0x2568 0x2000>;
+			};
+		};
+
+		sram0_ns_app: sram0_ns@4568 {
+			reg = <0x4568 0x25a98>;
+		};
+	};
+};
