@@ -30,7 +30,7 @@ manifest:
     - name: sdk-nrf
       remote: ncs
       repo-path: sdk-nrf
-      revision: v3.4.0
+      revision: 9f9725b23bc137e1e047c6a33773893b2c25ce0f  # NCS main (v3.4.99), 2026-11-03
       import: true
 
     # Overrides the uoscore-uedhoc pin imported via sdk-nrf with the fork that
