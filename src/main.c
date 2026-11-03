@@ -43,6 +43,9 @@
 #include <oscore_cloud/cloud_config.h>
 #include <oscore_cloud/cloud_session.h>
 #include <oscore_cloud/cloud_client.h>
+#ifdef CONFIG_OSCORE_CLOUD_FOTA
+#include <oscore_cloud/fota_client.h>
+#endif
 #ifdef CONFIG_OSCORE_CLOUD_DIAG
 #include <oscore_cloud/diag_bridge.h>
 #endif
@@ -644,6 +647,12 @@ int main(void)
 	if (err) {
 		LOG_WRN("settings_subsys_init failed: %d (SSN will not persist)", err);
 	}
+
+#ifdef CONFIG_OSCORE_CLOUD_FOTA
+	/* After a FOTA swap: confirm the new image (so MCUboot does not revert it)
+	 * and latch the SUCCEEDED/FAILED report, which the next FOTA step sends. */
+	fota_client_boot_check();
+#endif
 
 	date_time_register_handler(date_time_handler);
 
